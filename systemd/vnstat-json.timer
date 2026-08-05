@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic vnStat static JSON publish
+
+[Timer]
+OnCalendar=*-*-* *:01,06,11,16,21,26,31,36,41,46,51,56
+Persistent=true
+RandomizedDelaySec=20
+Unit=vnstat-json.service
+
+[Install]
+WantedBy=timers.target

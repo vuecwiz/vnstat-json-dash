@@ -1,0 +1,17 @@
+[Unit]
+Description=Publish vnStat SQLite data as static JSON
+After=vnstatd.service
+ConditionPathExists=/var/lib/vnstat/vnstat.db
+
+[Service]
+Type=oneshot
+User=vnstat
+Group=vnstat
+ExecStart=/usr/local/bin/vnstat-json --config /etc/vnstat.conf
+
+# The exporter only reads SQLite and writes the configured JSON directory.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/vnstat/json

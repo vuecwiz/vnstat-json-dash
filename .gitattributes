@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.sh text eol=lf
+scripts/vnstat-json text eol=lf
+*.service text eol=lf
+*.timer text eol=lf
+*.js text eol=lf

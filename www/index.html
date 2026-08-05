@@ -1,0 +1,1183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>vnStat JSON Dash</title>
+<script src="./chart.js"></script>
+<script src="./hammer.min.js"></script>
+<script src="./chartjs-plugin-zoom.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: #f5f7fa;
+    color: #333;
+    line-height: 1.6;
+  }
+  .container { max-width: 1400px; margin: 0 auto; padding: 16px; }
+  header {
+    background: linear-gradient(135deg, #1a2a3a 0%, #2c3e50 100%);
+    color: #fff;
+    padding: 14px 20px;
+    border-radius: 12px;
+    margin-bottom: 16px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.10);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .header-left { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .header-left h1 { font-size: 1.3rem; font-weight: 600; letter-spacing: -0.3px; }
+  .header-left .subtitle { opacity: 0.7; font-size: 0.82rem; }
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .header-right .tabs { margin-bottom: 0; gap: 4px; }
+  .header-right .tab {
+    background: rgba(255,255,255,0.10);
+    color: rgba(255,255,255,0.85);
+    font-size: 0.78rem;
+    padding: 5px 12px;
+    border-radius: 6px;
+  }
+  .header-right .tab:hover:not(.active) { background: rgba(255,255,255,0.18); }
+  .header-right .tab.active { background: rgba(255,255,255,0.28); color: #fff; }
+  .header-right .refresh-btn {
+    background: rgba(255,255,255,0.10);
+    color: rgba(255,255,255,0.85);
+    border-color: rgba(255,255,255,0.20);
+    font-size: 0.78rem;
+    padding: 5px 12px;
+    border-radius: 6px;
+  }
+  .header-right .refresh-btn:hover { background: rgba(255,255,255,0.18); border-color: rgba(255,255,255,0.30); }
+  .interface-tabs { flex: 1 1 auto; min-width: 0; gap: 4px; margin-bottom: 0; }
+  .interface-tabs .tab { font-size: 0.78rem; padding: 5px 12px; }
+  .lang-btn {
+    background: rgba(255,255,255,0.10);
+    color: rgba(255,255,255,0.85);
+    border: 1px solid rgba(255,255,255,0.20);
+    font-size: 0.78rem;
+    padding: 5px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    user-select: none;
+    line-height: 1.4;
+  }
+  .lang-btn:hover { background: rgba(255,255,255,0.18); }
+  .icon-only {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 5px;
+    background: rgba(255,255,255,0.10);
+    color: rgba(255,255,255,0.85);
+    border: 1px solid rgba(255,255,255,0.20);
+    border-radius: 6px;
+    cursor: pointer;
+    line-height: 1;
+  }
+  .icon-only:hover { background: rgba(255,255,255,0.18); }
+  .status { font-size: 0.72rem; opacity: 0.55; white-space: nowrap; }
+
+  .update-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    padding: 0 4px;
+    font-size: 0.75rem;
+    color: #888;
+  }
+  .update-status { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+  .update-bar .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #27ae60;
+    display: inline-block;
+  }
+  .update-bar .dot.offline {
+    background: #e74c3c;
+  }
+
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .card {
+    background: #fff;
+    border-radius: 10px;
+    padding: 16px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 2px 8px rgba(0,0,0,0.06);
+    transition: transform 0.2s cubic-bezier(0.2,0,0,1), box-shadow 0.2s cubic-bezier(0.2,0,0,1);
+  }
+  .card:hover { transform: translateY(-1px); box-shadow: 0 2px 4px rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.08); }
+  .card-label { font-size: 0.75rem; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+  .card-value { font-size: 1.25rem; font-weight: 700; color: #2c3e50; }
+  .card-sub { font-size: 0.8rem; color: #999; margin-top: 3px; }
+  .card-rx { color: #27ae60; }
+  .card-tx { color: #e74c3c; }
+
+  .section {
+    background: #fff;
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin-bottom: 16px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 2px 8px rgba(0,0,0,0.06);
+  }
+  .section-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #e9ecef;
+  }
+  .section-header h2 { font-size: 1.1rem; font-weight: 600; color: #2c3e50; }
+  .trend-legend { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-left: auto; flex-wrap: wrap; }
+  .trend-legend-item { display: inline-flex; align-items: center; gap: 5px; color: #333; font-size: 0.8rem; white-space: nowrap; cursor: pointer; }
+  .trend-legend-item.is-hidden { opacity: 0.45; }
+  .trend-legend-swatch { width: 14px; height: 14px; border: 1px solid rgba(0,0,0,0.15); }
+  .summary-chart-grid { margin-top: 16px; }
+  .summary-chart-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #e9ecef;
+  }
+  .summary-chart-header h3 { font-size: 0.9rem; font-weight: 600; color: #2c3e50; }
+  .summary-chart .chart-wrap { margin-bottom: 0; }
+  .trend-tabs-row { margin-bottom: 14px; }
+  .trend-tabs-row .tabs { margin-bottom: 0; }
+  .refresh-btn {
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid #dce0e5;
+    background: #f8f9fa;
+    color: #555;
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-weight: 500;
+    transition: background-color 0.15s ease-out, border-color 0.15s ease-out, transform 0.1s ease-out;
+    user-select: none;
+  }
+  .refresh-btn:hover { background: #e9ecef; border-color: #ced4da; }
+  .refresh-btn:active { transform: scale(0.96); }
+
+  .tabs { display: flex; gap: 4px; margin-bottom: 14px; flex-wrap: wrap; }
+  .update-bar .interface-tabs { margin-bottom: 0; }
+  .interface-tabs .tab { height: 29.46875px; display: inline-flex; align-items: center; }
+  .tab {
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: none;
+    background: #ecf0f1;
+    color: #555;
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-weight: 500;
+    transition: background-color 0.15s ease-out, color 0.15s ease-out, transform 0.1s ease-out;
+    white-space: nowrap;
+    user-select: none;
+  }
+  .tab.active { background: #2c3e50; color: #fff; }
+  .tab:hover:not(.active) { background: #dfe6e9; }
+  .tab:active { transform: scale(0.96); }
+  .tab.iface-tab { font-size: 0.78rem; padding: 5px 12px; }
+
+  .chart-wrap { position: relative; height: 300px; margin-bottom: 18px; }
+  .chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(480px, 1fr)); gap: 20px; }
+  @media (max-width: 600px) {
+    .container { padding: 10px 8px; }
+    .cards { grid-template-columns: 1fr 1fr; gap: 8px; }
+    .card { padding: 10px; }
+    .card-value { font-size: 1.1rem; }
+    .section { padding-inline: 8px; }
+    .chart-grid { grid-template-columns: 1fr; }
+    .chart-wrap { height: 240px; }
+    .section-header { flex-direction: row; align-items: flex-start; gap: 6px; }
+    .section-header h2 { height: 22px; line-height: 22px; font-size: 0.86rem; display: flex; align-items: center; }
+    .section-header > .trend-legend { height: 22px; align-items: stretch; gap: 2px; }
+    .section-header > .trend-legend .trend-legend-item { height: 22px; padding: 0 2px; font-size: 0.6rem; gap: 1px; line-height: 1; }
+    .section-header > .trend-legend .trend-legend-swatch { width: 9px; height: 9px; }
+    .trend-legend { gap: 4px; }
+    .trend-legend-item { font-size: 0.68rem; gap: 3px; }
+    .trend-legend-swatch { width: 11px; height: 11px; }
+    .summary-chart-grid { margin-top: 14px; gap: 16px; }
+    .summary-chart-header { gap: 6px; margin-bottom: 12px; padding-bottom: 8px; }
+    .summary-chart-header h3 { font-size: 0.82rem; }
+    .trend-tabs-row .tab { padding-inline: 8px; }
+    header { padding: 12px 14px; gap: 10px; position: relative; margin-bottom: 8px; }
+    .header-left h1 { font-size: 1.1rem; }
+    .header-left .subtitle { display: none; }
+    .header-right { justify-content: flex-end; }
+    .interface-tabs .tab { font-size: 0.72rem; padding: 4px 8px; }
+    .interface-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+    .interface-tabs::-webkit-scrollbar { display: none; }
+    .header-right .refresh-btn.icon-only { position: absolute; top: 12px; right: 72px; padding: 5px; }
+    .lang-btn { position: absolute; top: 12px; right: 14px; padding: 5px 8px; }
+    .update-bar { padding: 0; gap: 6px; }
+    table { table-layout: auto; width: max-content; min-width: 100%; font-size: 0.72rem; }
+    th, td { padding: 5px 3px; white-space: nowrap; overflow: visible; text-overflow: clip; }
+    th { font-size: 0.65rem; letter-spacing: 0; }
+    th:first-child, td:first-child { width: 30%; }
+    th:nth-child(2), td:nth-child(2),
+    th:nth-child(3), td:nth-child(3) { width: 23%; }
+    th:nth-child(4), td:nth-child(4) { width: 24%; }
+    .compact-time-table th:first-child, .compact-time-table td:first-child { width: 24%; }
+    .compact-time-table th:nth-child(2), .compact-time-table td:nth-child(2),
+    .compact-time-table th:nth-child(3), .compact-time-table td:nth-child(3) { width: 24%; }
+    .compact-time-table th:nth-child(4), .compact-time-table td:nth-child(4) { width: 28%; }
+  }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+  th, td { padding: 8px 10px; text-align: left; }
+  th {
+    background: #f8f9fa; font-weight: 600; color: #555; font-size: 0.76rem;
+    text-transform: uppercase; letter-spacing: 0.3px;
+    border-bottom: 1px solid #e9ecef; position: sticky; top: 0;
+  }
+  td { border-bottom: 1px solid #f0f0f0; transition: background-color 0.12s ease-out; }
+  tr:hover td { background: #f8f9fa; }
+  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  @media (max-width: 600px) {
+    /* Keep the table's intrinsic width so clipped content can be reached by swiping. */
+    table { table-layout: auto; width: max-content; min-width: 100%; }
+    th, td { white-space: nowrap; overflow: visible; text-overflow: clip; }
+  }
+  .num { font-family: "SF Mono", Monaco, "Cascadia Code", monospace; text-align: right; }
+  .rx-color { color: #27ae60; }
+  .tx-color { color: #e74c3c; }
+  .total-color { color: #3498db; font-weight: 600; }
+
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  .loading { text-align: center; padding: 30px; color: #888; }
+  .error {
+    background: #ffeaea; color: #c0392b;
+    padding: 12px 14px; border-radius: 8px;
+    margin-bottom: 12px; font-size: 0.9rem;
+    box-shadow: 0 1px 3px rgba(192,57,43,0.08);
+  }
+  .empty { text-align: center; padding: 24px; color: #aaa; font-style: italic; }
+
+  .footer {
+    text-align: center; padding: 8px 16px;
+    color: #aaa; font-size: 0.72rem; line-height: 1.3;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <div class="header-left">
+      <h1 data-i18n="title">vnStat JSON Dash</h1>
+      <span class="subtitle" data-i18n="subtitle">Network Interface Traffic Visualization</span>
+    </div>
+    <div class="header-right">
+      <button class="refresh-btn icon-only" onclick="loadData()" title="Refresh">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+      </button>
+      <button class="lang-btn" onclick="toggleLang()" id="langBtn">中文</button>
+    </div>
+  </header>
+
+  <div id="errorBox"></div>
+
+  <div class="update-bar">
+    <div class="tabs interface-tabs" id="ifaceTabs"></div>
+    <div class="update-status">
+      <span class="dot" id="statusDot"></span>
+      <span id="status"></span>
+    </div>
+  </div>
+
+  <div class="cards" id="overviewCards">
+    <div class="card">
+      <div class="card-label" data-i18n="totalRx">Total Received</div>
+      <div class="card-value card-rx" id="totalRx">--</div>
+      <div class="card-sub" id="totalRxRaw"></div>
+    </div>
+    <div class="card">
+      <div class="card-label" data-i18n="totalTx">Total Sent</div>
+      <div class="card-value card-tx" id="totalTx">--</div>
+      <div class="card-sub" id="totalTxRaw"></div>
+    </div>
+    <div class="card">
+      <div class="card-label" data-i18n="today">Today</div>
+      <div class="card-value total-color" id="todayTotal">--</div>
+      <div class="card-sub" id="todayDetail"></div>
+    </div>
+    <div class="card">
+      <div class="card-label" data-i18n="thisMonth">This Month</div>
+      <div class="card-value total-color" id="monthTotal">--</div>
+      <div class="card-sub" id="monthDetail"></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-header">
+      <h2 data-i18n="yearTop">Yearly Stats & TOP Days</h2>
+      <div id="summaryLegend" class="trend-legend" aria-label="Chart legend"></div>
+    </div>
+    <div class="chart-grid summary-chart-grid">
+      <div class="summary-chart">
+        <div class="summary-chart-header">
+          <h3 data-i18n="yearTitle">Monthly Traffic Stats</h3>
+        </div>
+        <div class="chart-wrap"><canvas id="chartYear"></canvas></div>
+      </div>
+      <div class="summary-chart">
+        <div class="summary-chart-header">
+          <h3 data-i18n="topTitle">TOP Traffic Days</h3>
+        </div>
+        <div class="chart-wrap"><canvas id="chartTop"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-header">
+      <h2 data-i18n="trend">Traffic Trend Charts</h2>
+      <div id="trendLegend" class="trend-legend" aria-label="Chart legend"></div>
+    </div>
+    <div class="trend-tabs-row">
+      <div class="tabs">
+        <button class="tab active" onclick="switchTimeTab(this,'tab-5min')" data-time="5min">5 min</button>
+        <button class="tab" onclick="switchTimeTab(this,'tab-half')" data-time="half">30 min</button>
+        <button class="tab" onclick="switchTimeTab(this,'tab-hour')" data-time="hour">1 hour</button>
+        <button class="tab" onclick="switchTimeTab(this,'tab-day')" data-time="day">Day</button>
+        <button class="tab" onclick="switchTimeTab(this,'tab-week')" data-time="week">Week</button>
+        <button class="tab" onclick="switchTimeTab(this,'tab-month')" data-time="month">Month</button>
+      </div>
+    </div>
+
+    <div id="tab-5min" class="tab-panel active">
+      <div class="chart-wrap"><canvas id="chart5min"></canvas></div>
+      <div id="table5min"></div>
+    </div>
+    <div id="tab-half" class="tab-panel">
+      <div class="chart-wrap"><canvas id="chartHalf"></canvas></div>
+      <div id="tableHalf"></div>
+    </div>
+    <div id="tab-hour" class="tab-panel">
+      <div class="chart-wrap"><canvas id="chartHour"></canvas></div>
+      <div id="tableHour"></div>
+    </div>
+    <div id="tab-day" class="tab-panel">
+      <div class="chart-wrap"><canvas id="chartDay"></canvas></div>
+      <div id="tableDay"></div>
+    </div>
+    <div id="tab-week" class="tab-panel">
+      <div class="chart-wrap"><canvas id="chartWeek"></canvas></div>
+      <div id="tableWeek"></div>
+    </div>
+    <div id="tab-month" class="tab-panel">
+      <div class="chart-wrap"><canvas id="chartMonth"></canvas></div>
+      <div id="tableMonth"></div>
+    </div>
+  </div>
+
+  <div class="footer" data-i18n="footer">
+    <a href="https://github.com/vuecwiz/vnstat-json-dash" target="_blank" style="color:#888;">vnStat JSON Dash</a> &middot; Powered by <a href="https://github.com/vergoh/vnstat" target="_blank" style="color:#888;">vnStat</a>
+  </div>
+</div>
+
+<script>
+const CHART_COLORS = {
+  rx: 'rgba(39, 174, 96, 0.7)', rxBorder: '#27ae60',
+  tx: 'rgba(231, 76, 60, 0.7)', txBorder: '#e74c3c',
+  grid: '#e9ecef', text: '#666'
+};
+
+let currentData = null;
+let charts = {};
+let currentIface = '';
+let ifaceList = [];
+const TIME_DIMENSION_STORAGE_KEY = 'vnstat-json-dash.timeDimension';
+const LEGEND_VISIBILITY_STORAGE_KEY = 'vnstat-json-dash.legendVisibility';
+const TIME_DIMENSIONS = {
+  '5min': { panelId: 'tab-5min', chartSuffix: '5min', fileSuffix: 'fiveminute' },
+  half: { panelId: 'tab-half', chartSuffix: 'Half', fileSuffix: 'halfhour' },
+  hour: { panelId: 'tab-hour', chartSuffix: 'Hour', fileSuffix: 'hour' },
+  day: { panelId: 'tab-day', chartSuffix: 'Day', fileSuffix: 'day' },
+  week: { panelId: 'tab-week', chartSuffix: 'Week', fileSuffix: 'week' },
+  month: { panelId: 'tab-month', chartSuffix: 'Month', fileSuffix: 'month' }
+};
+const DATASET_KEYS = ['rx', 'tx', 'total'];
+const REFRESH_GRACE_MS = 5000;
+const TRAFFIC_TIME_ORDER = ['fiveminute', 'halfhour', 'hour', 'day', 'week', 'month', 'year', 'top'];
+let refreshTimer = null;
+let loadRequestId = 0;
+
+function loadSavedTimeDimension() {
+  try {
+    const saved = window.localStorage.getItem(TIME_DIMENSION_STORAGE_KEY);
+    if (saved && TIME_DIMENSIONS[saved]) return saved;
+  } catch (e) {
+    // Private browsing or a restrictive storage policy must not break the page.
+  }
+  return '5min';
+}
+
+function loadSavedLegendVisibility() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(LEGEND_VISIBILITY_STORAGE_KEY) || '{}');
+    if (!saved || typeof saved !== 'object') return {};
+    return ['summary', 'trend'].reduce((result, group) => {
+      if (!saved[group] || typeof saved[group] !== 'object') return result;
+      const state = {};
+      DATASET_KEYS.forEach(key => {
+        if (typeof saved[group][key] === 'boolean') state[key] = saved[group][key];
+      });
+      if (Object.keys(state).length > 0) result[group] = state;
+      return result;
+    }, {});
+  } catch (e) {
+    // Private browsing or malformed stored data must not break the page.
+  }
+  return {};
+}
+
+function saveLegendVisibility() {
+  try {
+    window.localStorage.setItem(LEGEND_VISIBILITY_STORAGE_KEY, JSON.stringify(legendVisibility));
+  } catch (e) {
+    // Keep the current session usable when persistent storage is unavailable.
+  }
+}
+
+function datasetKey(index) {
+  return DATASET_KEYS[index] || String(index);
+}
+
+function applySavedLegendVisibility(chart, group) {
+  const saved = legendVisibility[group];
+  if (!saved) return;
+  let changed = false;
+  chart.data.datasets.forEach((dataset, index) => {
+    const key = datasetKey(index);
+    if (typeof saved[key] === 'boolean' && chart.isDatasetVisible(index) !== saved[key]) {
+      chart.setDatasetVisibility(index, saved[key]);
+      changed = true;
+    }
+  });
+  if (changed) chart.update();
+}
+
+function persistLegendVisibility(group, chart) {
+  const state = {};
+  chart.data.datasets.forEach((dataset, index) => {
+    state[datasetKey(index)] = chart.isDatasetVisible(index);
+  });
+  legendVisibility[group] = state;
+  saveLegendVisibility();
+}
+
+let currentTimeDimension = loadSavedTimeDimension();
+let legendVisibility = loadSavedLegendVisibility();
+let activeTrendChart = 'chart' + TIME_DIMENSIONS[currentTimeDimension].chartSuffix;
+let summaryRenderSignature = null;
+
+const I18N = {
+  'zh-CN': {
+    title: 'vnStat JSON Dash',
+    subtitle: '网络接口流量统计可视化面板',
+    refresh: '刷新',
+    totalRx: '总接收流量',
+    totalTx: '总发送流量',
+    today: '今日流量',
+    thisMonth: '本月流量',
+    yearTop: '月度统计 & TOP 流量日',
+    trend: '流量趋势图表',
+    time5min: '5 分钟',
+    timeHalf: '半小时',
+    timeHour: '1 小时',
+    timeDay: '天',
+    timeWeek: '周',
+    timeMonth: '月',
+    footer: '<a href="https://github.com/vuecwiz/vnstat-json-dash" target="_blank" style="color:#888;">vnStat JSON Dash</a> &middot; 由 <a href="https://github.com/vergoh/vnstat" target="_blank" style="color:#888;">vnStat</a> 提供数据',
+    rxLabel: '接收 (RX)',
+    txLabel: '发送 (TX)',
+    totalLabel: '总流量',
+    yearTitle: '月度流量统计',
+    topTitle: 'TOP 流量日',
+    totalTooltip: '总计',
+    tableTime: '时间',
+    tableRx: '接收',
+    tableTx: '发送',
+    tableTotal: '总计',
+    noData: '暂无 {label} 数据',
+    errNoIface: '索引文件中未找到接口数据',
+    errLoadIface: '加载接口列表失败',
+    errLoadData: '加载数据失败',
+    errHint: '请确保 vnstat_index.json 存在且可访问。',
+    loading: '加载中...',
+    updated: '已更新',
+    loadFailed: '加载失败',
+    langBtn: 'EN',
+    locale: 'zh-CN'
+  },
+  'en': {
+    title: 'vnStat JSON Dash',
+    subtitle: 'Network Interface Traffic Visualization',
+    refresh: 'Refresh',
+    totalRx: 'Total Received',
+    totalTx: 'Total Sent',
+    today: 'Today',
+    thisMonth: 'This Month',
+    yearTop: 'Monthly Stats & TOP Days',
+    trend: 'Traffic Trend Charts',
+    time5min: '5 min',
+    timeHalf: '30 min',
+    timeHour: '1 hour',
+    timeDay: 'Day',
+    timeWeek: 'Week',
+    timeMonth: 'Month',
+    footer: '<a href="https://github.com/vuecwiz/vnstat-json-dash" target="_blank" style="color:#888;">vnStat JSON Dash</a> &middot; Powered by <a href="https://github.com/vergoh/vnstat" target="_blank" style="color:#888;">vnStat</a>',
+    rxLabel: 'RX',
+    txLabel: 'TX',
+    totalLabel: 'Total',
+    yearTitle: 'Monthly Traffic Stats',
+    topTitle: 'TOP Traffic Days',
+    totalTooltip: 'Total',
+    tableTime: 'Time',
+    tableRx: 'RX',
+    tableTx: 'TX',
+    tableTotal: 'Total',
+    noData: 'No {label} data available',
+    errNoIface: 'No interfaces found in index',
+    errLoadIface: 'Failed to load interface list',
+    errLoadData: 'Failed to load data',
+    errHint: 'Please ensure vnstat_index.json exists and is accessible.',
+    loading: 'Loading...',
+    updated: 'Updated',
+    loadFailed: 'Load failed',
+    langBtn: 'CN',
+    locale: 'en-US'
+  }
+};
+
+const LANGUAGE_STORAGE_KEY = 'vnstat-json-dash.language';
+const INTERFACE_STORAGE_KEY = 'vnstat-json-dash.interface';
+
+function loadSavedLanguage() {
+  try {
+    const saved = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
+    if (saved === 'zh-CN' || saved === 'en') return saved;
+  } catch (e) {
+    // Private browsing or a restrictive storage policy must not break the page.
+  }
+  return 'zh-CN';
+}
+
+let currentLang = loadSavedLanguage();
+
+function t(key, ...args) {
+  let s = I18N[currentLang][key] || I18N['en'][key] || key;
+  args.forEach((a, i) => { s = s.replace('{' + i + '}', a); });
+  return s;
+}
+
+function applyI18n() {
+  document.documentElement.lang = currentLang === 'zh-CN' ? 'zh-CN' : 'en';
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.getAttribute('data-i18n');
+    if (key === 'footer') {
+      el.innerHTML = t('footer');
+    } else {
+      el.textContent = t(key);
+    }
+  });
+  document.querySelectorAll('.tabs button[data-time]').forEach(btn => {
+    const time = btn.getAttribute('data-time');
+    btn.textContent = t('time' + time.charAt(0).toUpperCase() + time.slice(1));
+  });
+  document.getElementById('langBtn').textContent = t('langBtn');
+  if (currentData) {
+    renderAll();
+    updateStatusFromData(currentData);
+  }
+}
+
+function restoreTimeDimension() {
+  const config = TIME_DIMENSIONS[currentTimeDimension];
+  if (!config) return;
+  document.querySelectorAll('.tabs .tab:not(.iface-tab)').forEach(tab => {
+    tab.classList.toggle('active', tab.dataset.time === currentTimeDimension);
+  });
+  document.querySelectorAll('.tab-panel').forEach(panel => {
+    panel.classList.toggle('active', panel.id === config.panelId);
+  });
+  activeTrendChart = 'chart' + config.chartSuffix;
+}
+
+function toggleLang() {
+  currentLang = currentLang === 'zh-CN' ? 'en' : 'zh-CN';
+  try {
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, currentLang);
+  } catch (e) {
+    // Keep the current session usable when persistent storage is unavailable.
+  }
+  applyI18n();
+}
+
+function fmtBytes(bytes) {
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
+  const k = 1024;
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + units[i];
+}
+
+function fmtTableBytes(bytes, compact) {
+  const value = fmtBytes(bytes);
+  if (!compact) return value;
+  return value.replace('KiB', 'K').replace('MiB', 'M').replace('GiB', 'G').replace('TiB', 'T').replace('PiB', 'P');
+}
+
+function fmtRate(bytes, seconds) {
+  if (!seconds) return fmtBytes(bytes);
+  return fmtBytes(bytes / seconds) + '/s';
+}
+
+function showError(msg) {
+  document.getElementById('errorBox').innerHTML = '<div class="error">' + msg + '</div>';
+}
+
+function clearError() {
+  document.getElementById('errorBox').innerHTML = '';
+}
+
+function latestTrafficTimestamp(data) {
+  const traffic = data && data.interface && data.interface.traffic;
+  if (traffic) {
+    for (const key of TRAFFIC_TIME_ORDER) {
+      const entries = traffic[key];
+      if (!Array.isArray(entries) || entries.length === 0) continue;
+      const latest = entries.reduce((max, entry) => Math.max(max, Number(entry.timestamp) || 0), 0);
+      if (latest > 0) return latest;
+    }
+  }
+  return Number(data && data.interface && data.interface.updated && data.interface.updated.timestamp)
+    || Number(data && data.generated)
+    || 0;
+}
+
+function updateStatusFromData(data) {
+  const timestamp = latestTrafficTimestamp(data);
+  const status = document.getElementById('status');
+  if (!status || !timestamp) return;
+  status.textContent = t('updated') + ' ' + new Date(timestamp * 1000).toLocaleTimeString(t('locale'), {
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+function nextRefreshDelay(dimension, now = new Date()) {
+  const next = new Date(now.getTime());
+  switch (dimension) {
+    case '5min':
+      next.setSeconds(0, 0);
+      next.setMinutes(Math.floor(next.getMinutes() / 5) * 5 + 5);
+      break;
+    case 'half':
+      next.setSeconds(0, 0);
+      next.setMinutes(Math.floor(next.getMinutes() / 30) * 30 + 30);
+      break;
+    case 'hour':
+      next.setMinutes(0, 0, 0);
+      next.setHours(next.getHours() + 1);
+      break;
+    case 'day':
+      next.setHours(24, 0, 0, 0);
+      break;
+    case 'week': {
+      const daysToMonday = ((8 - now.getDay()) % 7) || 7;
+      next.setHours(0, 0, 0, 0);
+      next.setDate(next.getDate() + daysToMonday);
+      break;
+    }
+    case 'month':
+      next.setDate(1);
+      next.setHours(0, 0, 0, 0);
+      next.setMonth(next.getMonth() + 1);
+      break;
+    default:
+      return 60000;
+  }
+  return Math.max(1000, next.getTime() - now.getTime() + REFRESH_GRACE_MS);
+}
+
+function scheduleNextRefresh(retry = false) {
+  if (refreshTimer !== null) clearTimeout(refreshTimer);
+  const delay = retry ? 60000 : nextRefreshDelay(currentTimeDimension);
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null;
+    loadData();
+  }, delay);
+}
+
+async function fetchJson(filename) {
+  const separator = filename.includes('?') ? '&' : '?';
+  const resp = await fetch(`./${filename}${separator}t=${Date.now()}`, { cache: 'no-store' });
+  if (!resp.ok) {
+    const error = new Error('HTTP ' + resp.status);
+    error.status = resp.status;
+    throw error;
+  }
+  return resp.json();
+}
+
+async function loadInterfaces() {
+  try {
+    const resp = await fetch(`./vnstat_index.json?t=${Date.now()}`, { cache: 'no-store' });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const idx = await resp.json();
+    const container = document.getElementById('ifaceTabs');
+    container.innerHTML = '';
+    ifaceList = idx.interfaces || [];
+    if (ifaceList.length === 0) {
+      showError(t('errNoIface'));
+      return;
+    }
+    let savedIface = '';
+    try {
+      savedIface = window.localStorage.getItem(INTERFACE_STORAGE_KEY) || '';
+    } catch (e) {
+      // Private browsing or a restrictive storage policy must not break the page.
+    }
+    const selectedIface = ifaceList.some(iface => iface.name === savedIface)
+      ? savedIface : ifaceList[0].name;
+    ifaceList.forEach(iface => {
+      const btn = document.createElement('button');
+      btn.className = 'tab iface-tab' + (iface.name === selectedIface ? ' active' : '');
+      btn.textContent = iface.alias || iface.name;
+      btn.onclick = () => switchIface(btn, iface.name);
+      container.appendChild(btn);
+      if (iface.name === selectedIface) currentIface = iface.name;
+    });
+    await loadData();
+  } catch (e) {
+    showError(t('errLoadIface') + ': ' + e.message + '<br>' + t('errHint'));
+  }
+}
+
+function switchIface(btn, iface) {
+  document.querySelectorAll('#ifaceTabs .tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  currentIface = iface;
+  try {
+    window.localStorage.setItem(INTERFACE_STORAGE_KEY, iface);
+  } catch (e) {
+    // Keep the current session usable when persistent storage is unavailable.
+  }
+  loadData();
+}
+
+async function loadData() {
+  if (!currentIface) return;
+  const requestId = ++loadRequestId;
+  document.getElementById('status').textContent = t('loading');
+  document.getElementById('statusDot').classList.remove('offline');
+  clearError();
+  try {
+    const dimension = TIME_DIMENSIONS[currentTimeDimension] || TIME_DIMENSIONS['5min'];
+    const dimensionFilename = encodeURIComponent(`vnstat_${currentIface}_${dimension.fileSuffix}.json`);
+    currentData = await fetchJson(dimensionFilename);
+    if (requestId !== loadRequestId) return;
+    renderAll();
+    updateStatusFromData(currentData);
+    document.getElementById('statusDot').classList.remove('offline');
+    scheduleNextRefresh();
+  } catch (e) {
+    if (requestId !== loadRequestId) return;
+    showError(t('errLoadData') + ': ' + e.message);
+    document.getElementById('status').textContent = t('loadFailed');
+    document.getElementById('statusDot').classList.add('offline');
+    scheduleNextRefresh(true);
+  }
+}
+
+function renderAll() {
+  if (!currentData || !currentData.interface) return;
+  const d = currentData.interface;
+  const traffic = d.traffic;
+
+  document.getElementById('totalRx').textContent = fmtBytes(traffic.total.rx);
+  document.getElementById('totalTx').textContent = fmtBytes(traffic.total.tx);
+  document.getElementById('totalRxRaw').textContent = traffic.total.rx.toLocaleString() + ' B';
+  document.getElementById('totalTxRaw').textContent = traffic.total.tx.toLocaleString() + ' B';
+
+  const today = (traffic.day && traffic.day.length > 0) ? traffic.day[traffic.day.length - 1] : null;
+  if (today) {
+    const tot = today.rx + today.tx;
+    document.getElementById('todayTotal').textContent = fmtBytes(tot);
+    document.getElementById('todayDetail').textContent = '↓ ' + fmtBytes(today.rx) + '  ↑ ' + fmtBytes(today.tx);
+  } else {
+    document.getElementById('todayTotal').textContent = '--';
+    document.getElementById('todayDetail').textContent = '';
+  }
+
+  const cmon = (traffic.month && traffic.month.length > 0) ? traffic.month[traffic.month.length - 1] : null;
+  if (cmon) {
+    const tot = cmon.rx + cmon.tx;
+    document.getElementById('monthTotal').textContent = fmtBytes(tot);
+    document.getElementById('monthDetail').textContent = '↓ ' + fmtBytes(cmon.rx) + '  ↑ ' + fmtBytes(cmon.tx);
+  } else {
+    document.getElementById('monthTotal').textContent = '--';
+    document.getElementById('monthDetail').textContent = '';
+  }
+
+  renderChartTable('5min', traffic.fiveminute, 'time5min', 2, true);
+  renderChartTable('Half', traffic.halfhour, 'timeHalf', 2, true);
+  renderChartTable('Hour', traffic.hour, 'timeHour', 2, true);
+  renderChartTable('Day', traffic.day, 'timeDay', 1, false);
+  renderChartTable('Week', traffic.week, 'timeWeek', 1, false);
+  renderChartTable('Month', traffic.month, 'timeMonth', 3, false);
+  // Trend dimension files contain the complete snapshot, so switching the
+  // trend tab does not change the monthly/TOP datasets. Avoid destroying and
+  // recreating those charts (and their legend buttons) unless their actual
+  // data, interface, or language has changed.
+  const nextSummarySignature = JSON.stringify({
+    iface: currentIface,
+    lang: currentLang,
+    month: traffic.month || [],
+    top: traffic.top || []
+  });
+  if (nextSummarySignature !== summaryRenderSignature) {
+    renderYearChart(traffic.month);
+    renderTopChart(traffic.top);
+    renderSummaryLegend();
+    summaryRenderSignature = nextSummarySignature;
+  }
+  renderTrendLegend();
+}
+
+const ZOOM_PLUGIN = {
+  zoom: {
+    pan: { enabled: true, mode: 'x', modifierKey: null },
+    zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'x' }
+  }
+};
+
+const LEGEND_PLUGIN = {
+  legend: {
+    labels: {
+      generateLabels: (chart) => {
+        return chart.data.datasets.map((ds, i) => {
+          const isHidden = !chart.isDatasetVisible(i);
+          return {
+            text: ds.label,
+            fillStyle: isHidden ? 'rgba(153,153,153,0.25)' : ds.backgroundColor,
+            strokeStyle: isHidden ? 'rgba(153,153,153,0.4)' : ds.borderColor,
+            lineWidth: ds.borderWidth || 1,
+            hidden: false,
+            datasetIndex: i,
+            index: i
+          };
+        });
+      }
+    },
+    onClick: (e, legendItem, legend) => {
+      const ci = legend.chart;
+      const index = legendItem.datasetIndex;
+      ci.setDatasetVisibility(index, !ci.isDatasetVisible(index));
+      ci.update();
+    }
+  }
+};
+
+const INLINE_TITLE_PLUGIN = {
+  id: 'inlineTitle',
+  beforeDraw: (chart, args, options) => {
+    if (!options || !options.text || !chart.legend) return;
+    const ctx = chart.ctx;
+    const legend = chart.legend;
+    ctx.save();
+    ctx.fillStyle = options.color || '#2c3e50';
+    ctx.font = '600 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(options.text, legend.left, legend.top + legend.height / 2);
+    ctx.restore();
+  }
+};
+
+function renderChartTable(suffix, data, labelKey, dateType, showTime) {
+  const label = t(labelKey);
+  if (!data || data.length === 0) {
+    document.getElementById('table' + suffix).innerHTML = '<div class="empty">' + t('noData', label) + '</div>';
+    destroyChart('chart' + suffix);
+    return;
+  }
+  const loc = t('locale');
+  const compactChart = window.matchMedia('(max-width: 600px)').matches;
+  const labels = data.map(x => {
+    const d = new Date(x.timestamp * 1000);
+    if (showTime) {
+      return compactChart
+        ? d.toLocaleTimeString(loc, { hour: 'numeric', minute: '2-digit' })
+        : d.toLocaleString(loc, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    }
+    return d.toLocaleDateString(loc, { month: 'short', day: 'numeric' });
+  });
+  const rx = data.map(x => x.rx);
+  const tx = data.map(x => x.tx);
+  const totals = data.map(x => x.rx + x.tx);
+
+  const ctx = document.getElementById('chart' + suffix).getContext('2d');
+  destroyChart('chart' + suffix);
+  charts['chart' + suffix] = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [
+        { label: t('rxLabel'), data: rx, backgroundColor: CHART_COLORS.rx, borderColor: CHART_COLORS.rxBorder, borderWidth: 1 },
+        { label: t('txLabel'), data: tx, backgroundColor: CHART_COLORS.tx, borderColor: CHART_COLORS.txBorder, borderWidth: 1 },
+        { label: t('totalLabel'), data: totals, backgroundColor: 'rgba(52, 152, 219, 0.7)', borderColor: '#3498db', borderWidth: 1, hidden: true }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false, axis: 'x' },
+      scales: {
+        x: { ticks: { autoSkip: true, maxTicksLimit: compactChart ? 5 : 8, maxRotation: 0, minRotation: 0, font: { size: 10 } }, grid: { display: false } },
+        y: { beginAtZero: true, grid: { color: CHART_COLORS.grid }, ticks: { callback: v => fmtBytes(v) } }
+      },
+      plugins: {
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          axis: 'x',
+          callbacks: {
+            label: ctx => ctx.dataset.label + ': ' + fmtBytes(ctx.raw),
+            afterBody: (items) => {
+              const idx = items[0].dataIndex;
+              return '  ' + t('totalTooltip') + ': ' + fmtBytes(rx[idx] + tx[idx]);
+            }
+          }
+        },
+        legend: { display: false },
+        ...ZOOM_PLUGIN
+      }
+    }
+  });
+  applySavedLegendVisibility(charts['chart' + suffix], 'trend');
+
+  const rows = data.slice(-24).reverse();
+  const compact = window.matchMedia('(max-width: 600px)').matches;
+  const tableClass = showTime ? '' : ' class="compact-time-table"';
+  let html = '<div class="table-scroll"><table' + tableClass + '><thead><tr><th>' + t('tableTime') + '</th><th class="num">' + t('tableRx') + '</th><th class="num">' + t('tableTx') + '</th><th class="num">' + t('tableTotal') + '</th></tr></thead><tbody>';
+  rows.forEach(r => {
+    const d = new Date(r.timestamp * 1000);
+    const dt = compact
+      ? d.toLocaleString(loc, showTime
+        ? { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }
+        : { month: 'short', day: 'numeric' })
+      : (showTime ? d.toLocaleString(loc) : d.toLocaleDateString(loc));
+    html += `<tr><td>${dt}</td><td class="num rx-color">${fmtTableBytes(r.rx, compact)}</td><td class="num tx-color">${fmtTableBytes(r.tx, compact)}</td><td class="num total-color">${fmtTableBytes(r.rx + r.tx, compact)}</td></tr>`;
+  });
+  html += '</tbody></table></div>';
+  document.getElementById('table' + suffix).innerHTML = html;
+}
+
+function renderChartLegend(chartId, containerId) {
+  const container = document.getElementById(containerId);
+  const chart = charts[chartId];
+  if (!container) return;
+  if (!chart) {
+    container.innerHTML = '';
+    return;
+  }
+  container.innerHTML = '';
+  chart.data.datasets.forEach((dataset, index) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'trend-legend-item' + (chart.isDatasetVisible(index) ? '' : ' is-hidden');
+    item.innerHTML = '<span class="trend-legend-swatch"></span><span></span>';
+    item.querySelector('.trend-legend-swatch').style.backgroundColor = dataset.backgroundColor;
+    item.querySelector('span:last-child').textContent = dataset.label;
+    item.onclick = () => {
+      chart.setDatasetVisibility(index, !chart.isDatasetVisible(index));
+      chart.update();
+      persistLegendVisibility('trend', chart);
+      renderChartLegend(chartId, containerId);
+    };
+    container.appendChild(item);
+  });
+}
+
+function renderSummaryLegend() {
+  const container = document.getElementById('summaryLegend');
+  const chartsToToggle = [charts.chartYear, charts.chartTop].filter(Boolean);
+  const chart = chartsToToggle[0];
+  if (!container) return;
+  if (!chart) {
+    container.innerHTML = '';
+    return;
+  }
+  container.innerHTML = '';
+  chart.data.datasets.forEach((dataset, index) => {
+    const item = document.createElement('button');
+    const allHidden = chartsToToggle.every(c => !c.isDatasetVisible(index));
+    item.type = 'button';
+    item.className = 'trend-legend-item' + (allHidden ? ' is-hidden' : '');
+    item.innerHTML = '<span class="trend-legend-swatch"></span><span></span>';
+    item.querySelector('.trend-legend-swatch').style.backgroundColor = dataset.backgroundColor;
+    item.querySelector('span:last-child').textContent = dataset.label;
+    item.onclick = () => {
+      const shouldShow = !chart.isDatasetVisible(index);
+      chartsToToggle.forEach(c => {
+        c.setDatasetVisibility(index, shouldShow);
+        c.update();
+      });
+      persistLegendVisibility('summary', chartsToToggle[0]);
+      renderSummaryLegend();
+    };
+    container.appendChild(item);
+  });
+}
+
+function renderTrendLegend() {
+  renderChartLegend(activeTrendChart, 'trendLegend');
+}
+
+function renderYearChart(data) {
+  if (!data || data.length === 0) {
+    destroyChart('chartYear');
+    return;
+  }
+  const labels = data.map(x => `${x.date.year}-${String(x.date.month).padStart(2, '0')}`);
+  const rx = data.map(x => x.rx);
+  const tx = data.map(x => x.tx);
+  const totals = data.map(x => x.rx + x.tx);
+  const ctx = document.getElementById('chartYear').getContext('2d');
+  destroyChart('chartYear');
+  charts['chartYear'] = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [
+        { label: t('rxLabel'), data: rx, backgroundColor: CHART_COLORS.rx, borderColor: CHART_COLORS.rxBorder, borderWidth: 1 },
+        { label: t('txLabel'), data: tx, backgroundColor: CHART_COLORS.tx, borderColor: CHART_COLORS.txBorder, borderWidth: 1 },
+        { label: t('totalLabel'), data: totals, backgroundColor: 'rgba(52, 152, 219, 0.7)', borderColor: '#3498db', borderWidth: 1, hidden: true }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false, axis: 'x' },
+      scales: {
+        y: { beginAtZero: true, ticks: { callback: v => fmtBytes(v) } }
+      },
+      plugins: {
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          axis: 'x',
+          callbacks: { label: ctx => ctx.dataset.label + ': ' + fmtBytes(ctx.raw) }
+        },
+        legend: { display: false }
+      }
+    }
+  });
+  applySavedLegendVisibility(charts['chartYear'], 'summary');
+}
+
+function renderTopChart(data) {
+  if (!data || data.length === 0) {
+    destroyChart('chartTop');
+    return;
+  }
+  const loc = t('locale');
+  const labels = data.map(x => {
+    const d = new Date(x.timestamp * 1000);
+    return d.toLocaleDateString(loc, { month: 'short', day: 'numeric' });
+  });
+  const rx = data.map(x => x.rx);
+  const tx = data.map(x => x.tx);
+  const totals = data.map(x => x.rx + x.tx);
+  const ctx = document.getElementById('chartTop').getContext('2d');
+  destroyChart('chartTop');
+  charts['chartTop'] = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [
+        { label: t('rxLabel'), data: rx, backgroundColor: CHART_COLORS.rx, borderColor: CHART_COLORS.rxBorder, borderWidth: 1, hidden: true },
+        { label: t('txLabel'), data: tx, backgroundColor: CHART_COLORS.tx, borderColor: CHART_COLORS.txBorder, borderWidth: 1, hidden: true },
+        { label: t('totalLabel'), data: totals, backgroundColor: 'rgba(52, 152, 219, 0.7)', borderColor: '#3498db', borderWidth: 1 }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false, axis: 'y' },
+      indexAxis: 'y',
+      scales: {
+        x: { ticks: { autoSkip: true, maxTicksLimit: 6, maxRotation: 0, minRotation: 0, callback: v => fmtBytes(v) } }
+      },
+      plugins: {
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          axis: 'y',
+          callbacks: { label: ctx => ctx.dataset.label + ': ' + fmtBytes(ctx.raw) }
+        },
+        legend: { display: false }
+      }
+    }
+  });
+  applySavedLegendVisibility(charts['chartTop'], 'summary');
+}
+
+function destroyChart(id) {
+  if (charts[id]) {
+    charts[id].destroy();
+    delete charts[id];
+  }
+}
+
+function switchTimeTab(btn, panelId) {
+  document.querySelectorAll('.tabs .tab:not(.iface-tab)').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById(panelId).classList.add('active');
+  const selected = Object.keys(TIME_DIMENSIONS).find(key => TIME_DIMENSIONS[key].panelId === panelId);
+  if (!selected) return;
+  currentTimeDimension = selected;
+  activeTrendChart = 'chart' + TIME_DIMENSIONS[selected].chartSuffix;
+  try {
+    window.localStorage.setItem(TIME_DIMENSION_STORAGE_KEY, selected);
+  } catch (e) {
+    // Keep the current session usable when persistent storage is unavailable.
+  }
+  renderTrendLegend();
+  loadData();
+}
+
+applyI18n();
+restoreTimeDimension();
+loadInterfaces();
+</script>
+</body>
+</html>

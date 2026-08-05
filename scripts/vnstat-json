@@ -1,0 +1,357 @@
+#!/usr/bin/env python3
+"""Export vnStat SQLite data as per-dimension JSON snapshots.
+
+The exporter intentionally uses only Python's standard library so it can run
+on any host that has a readable vnStat SQLite database. Database timestamps are
+normally stored as local wall-clock values by vnStat and are converted with the
+host's local timezone, matching ``vnstat --json``. With ``UseUTC 1``, database
+values are interpreted as UTC.
+"""
+
+import argparse
+import calendar
+import errno
+import fcntl
+import json
+import os
+import re
+import sqlite3
+import sys
+import tempfile
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional
+
+
+DIMENSIONS = (
+    "fiveminute",
+    "halfhour",
+    "hour",
+    "day",
+    "week",
+    "month",
+    "year",
+    "top",
+)
+
+
+class Sample:
+    """One vnStat data row (kept compatible with Python 3.6)."""
+
+    __slots__ = ("rowid", "date", "rx", "tx")
+
+    def __init__(self, rowid: int, date: datetime, rx: int, tx: int) -> None:
+        self.rowid = rowid
+        self.date = date
+        self.rx = rx
+        self.tx = tx
+
+
+def parse_db_datetime(value: str) -> datetime:
+    value = value.strip().replace("T", " ")
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    raise ValueError(f"Unsupported vnStat date value: {value!r}")
+
+
+def vnstat_timestamp(value: datetime, use_utc: bool = False) -> int:
+    """Convert a database wall-clock value to vnStat's JSON epoch."""
+    if use_utc:
+        return calendar.timegm(value.timetuple())
+    return int(time.mktime(value.timetuple()))
+
+
+def date_fields(value: datetime, date_type: int) -> Dict:
+    if date_type == 1:
+        return {"date": {"year": value.year, "month": value.month, "day": value.day}}
+    if date_type == 2:
+        return {
+            "date": {"year": value.year, "month": value.month, "day": value.day},
+            "time": {"hour": value.hour, "minute": value.minute},
+        }
+    if date_type == 3:
+        return {"date": {"year": value.year, "month": value.month}}
+    if date_type == 4:
+        return {"date": {"year": value.year}}
+    return {}
+
+
+def sample_entry(sample: Sample, date_type: int, use_utc: bool = False) -> Dict:
+    result = {"id": sample.rowid}
+    result.update(date_fields(sample.date, date_type))
+    result["timestamp"] = vnstat_timestamp(sample.date, use_utc)
+    result["rx"] = sample.rx
+    result["tx"] = sample.tx
+    return result
+
+
+def aggregate(samples: Iterable[Sample], bucket_fn) -> List[Sample]:
+    result = []  # type: List[Sample]
+    current: Optional[Sample] = None
+    current_bucket: Optional[datetime] = None
+    for sample in samples:
+        bucket = bucket_fn(sample.date)
+        if current is not None and bucket == current_bucket:
+            current = Sample(current.rowid, current.date, current.rx + sample.rx, current.tx + sample.tx)
+            result[-1] = current
+        else:
+            current = Sample(0, bucket, sample.rx, sample.tx)
+            current_bucket = bucket
+            result.append(current)
+    return result
+
+
+def halfhour_bucket(value: datetime) -> datetime:
+    return value.replace(minute=(value.minute // 30) * 30, second=0, microsecond=0)
+
+
+def week_bucket(value: datetime) -> datetime:
+    start = value.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start - timedelta(days=start.weekday())
+
+
+def read_config(path: Optional[Path]) -> Dict[str, str]:
+    if path is None or not path.exists():
+        return {}
+    values = {}  # type: Dict[str, str]
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith(";") or line.startswith("#"):
+            continue
+        match = re.match(r"^(DatabaseDir|Database|JsonExportDir|UseUTC)\s+(.+?)\s*$", line)
+        if not match:
+            continue
+        value = match.group(2).strip().strip('"')
+        values[match.group(1)] = value
+    return values
+
+
+class Exporter:
+    def __init__(self, dbfile: Path, output: Path, interface: Optional[str] = None,
+                 verbose: bool = False, use_utc: bool = False):
+        self.dbfile = dbfile
+        self.output = output
+        self.interface_filter = interface
+        self.verbose = verbose
+        self.use_utc = use_utc
+        self.connection: Optional[sqlite3.Connection] = None
+        self.vnstat_version = "unknown"
+
+    def open(self) -> None:
+        uri = f"file:{self.dbfile.resolve()}?mode=ro"
+        self.connection = sqlite3.connect(uri, uri=True, timeout=10)
+        self.connection.row_factory = sqlite3.Row
+        self.connection.execute("PRAGMA query_only = ON")
+        row = self.connection.execute(
+            "SELECT value FROM info WHERE name = 'vnstatversion'"
+        ).fetchone()
+        if row:
+            self.vnstat_version = str(row[0])
+
+    def close(self) -> None:
+        if self.connection is not None:
+            self.connection.close()
+            self.connection = None
+
+    def interfaces(self) -> List[sqlite3.Row]:
+        assert self.connection is not None
+        if self.interface_filter:
+            rows = self.connection.execute(
+                "SELECT id, name, alias, created, updated, rxtotal, txtotal "
+                "FROM interface WHERE name = ? ORDER BY name",
+                (self.interface_filter,),
+            ).fetchall()
+        else:
+            rows = self.connection.execute(
+                "SELECT id, name, alias, created, updated, rxtotal, txtotal "
+                "FROM interface ORDER BY name"
+            ).fetchall()
+        if self.interface_filter and not rows:
+            raise RuntimeError(f'Interface "{self.interface_filter}" not found in database')
+        return rows
+
+    def samples(self, interface_id: int, table: str, order: str = "date ASC") -> List[Sample]:
+        assert self.connection is not None
+        if table not in DIMENSIONS:
+            raise ValueError(f"Unsupported table: {table}")
+        rows = self.connection.execute(
+            f"SELECT id, date, rx, tx FROM {table} WHERE interface = ? ORDER BY {order}",
+            (interface_id,),
+        )
+        return [Sample(int(row[0]), parse_db_datetime(row[1]), int(row[2]), int(row[3])) for row in rows]
+
+    def top_samples(self, interface_id: int) -> List[Sample]:
+        assert self.connection is not None
+        rows = self.connection.execute(
+            "SELECT id, date, rx, tx FROM top WHERE interface = ? "
+            "ORDER BY (rx + tx) DESC, date ASC",
+            (interface_id,),
+        )
+        return [Sample(int(row[0]), parse_db_datetime(row[1]), int(row[2]), int(row[3])) for row in rows]
+
+    def snapshot(self, row: sqlite3.Row) -> dict:
+        fiveminute = self.samples(row["id"], "fiveminute")
+        hour = self.samples(row["id"], "hour")
+        day = self.samples(row["id"], "day")
+        month = self.samples(row["id"], "month")
+        year = self.samples(row["id"], "year")
+        top = self.top_samples(row["id"])
+        halfhour = aggregate(fiveminute, halfhour_bucket)
+        week = aggregate(day, week_bucket)
+
+        def array(values: Iterable[Sample], date_type: int) -> List[Dict]:
+            return [sample_entry(value, date_type, self.use_utc) for value in values]
+
+        created = parse_db_datetime(row["created"])
+        updated = parse_db_datetime(row["updated"])
+        return {
+            "vnstatversion": self.vnstat_version,
+            "jsonversion": "2",
+            "generated": int(time.time()),
+            "interface": {
+                "name": row["name"],
+                "alias": row["alias"] or "",
+                "created": {**date_fields(created, 1), "timestamp": vnstat_timestamp(created, self.use_utc)},
+                "updated": {**date_fields(updated, 2), "timestamp": vnstat_timestamp(updated, self.use_utc)},
+                "traffic": {
+                    "total": {"rx": int(row["rxtotal"]), "tx": int(row["txtotal"])},
+                    "fiveminute": array(fiveminute, 2),
+                    "halfhour": array(halfhour, 2),
+                    "hour": array(hour, 2),
+                    "day": array(day, 1),
+                    "week": array(week, 1),
+                    "month": array(month, 3),
+                    "year": array(year, 4),
+                    "top": array(top, 1),
+                },
+            },
+        }
+
+    def write_atomic(self, path: Path, payload: bytes) -> None:
+        self.output.mkdir(parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=self.output)
+        try:
+            # mkstemp creates 0600 files. JSON is served by nginx, so publish
+            # every snapshot as a conventional world-readable 0644 file,
+            # including when an older run left a restrictive file behind.
+            os.fchmod(fd, 0o644)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        except Exception:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+            raise
+
+    def export(self) -> int:
+        self.output.mkdir(parents=True, exist_ok=True)
+        rows = self.interfaces()
+        index = {
+            "vnstatversion": self.vnstat_version,
+            "generated": int(time.time()),
+            "interfaces": [{"name": row["name"], "alias": row["alias"] or ""} for row in rows],
+        }
+        for row in rows:
+            snapshot = self.snapshot(row)
+            payload = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"), sort_keys=False).encode("utf-8")
+            for dimension in DIMENSIONS:
+                self.write_atomic(self.output / f"vnstat_{row['name']}_{dimension}.json", payload)
+            # The Python exporter owns the output directory; remove obsolete
+            # single-file snapshots from the earlier C exporter.
+            legacy = self.output / f"vnstat_{row['name']}.json"
+            try:
+                legacy.unlink()
+            except FileNotFoundError:
+                pass
+            if self.verbose:
+                print(f"exported {row['name']}")
+        index_payload = json.dumps(index, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        self.write_atomic(self.output / "vnstat_index.json", index_payload)
+        return len(rows)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Export vnStat SQLite data to per-dimension JSON files")
+    parser.add_argument("-d", "--dbfile", type=Path, help="vnStat SQLite database")
+    parser.add_argument("-o", "--output", type=Path, help="JSON output directory")
+    parser.add_argument("-c", "--config", type=Path, help="vnStat configuration file")
+    parser.add_argument("-i", "--interface", help="Export only this interface")
+    parser.add_argument(
+        "--lock-file",
+        type=Path,
+        help="Lock file for preventing overlapping exports (default: OUTPUT/.vnstat-json.lock)",
+    )
+    parser.add_argument("-v", "--verbose", action="store_true")
+    return parser.parse_args()
+
+
+class ExportBusyError(RuntimeError):
+    """Raised when another timer/cron invocation owns the export lock."""
+
+
+class ExportLock:
+    """A non-blocking advisory lock held for the complete export."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.handle = None
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.handle = self.path.open("a+")
+        try:
+            fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except IOError as error:
+            self.handle.close()
+            self.handle = None
+            if error.errno in (errno.EACCES, errno.EAGAIN):
+                raise ExportBusyError(str(self.path))
+            raise
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self.handle is not None:
+            fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+            self.handle.close()
+            self.handle = None
+
+
+def main() -> int:
+    args = parse_args()
+    config = read_config(args.config)
+    if args.dbfile is not None:
+        dbfile = args.dbfile
+    elif config.get("Database"):
+        dbfile = Path(config["Database"])
+    else:
+        dbfile = Path(config.get("DatabaseDir", "/var/lib/vnstat")) / "vnstat.db"
+    output = args.output or Path(config.get("JsonExportDir", "/var/lib/vnstat/json"))
+    use_utc = config.get("UseUTC", "0").strip().lower() in ("1", "yes", "true", "on")
+    exporter = Exporter(dbfile, output, args.interface, args.verbose, use_utc)
+    lock_path = args.lock_file or (output / ".vnstat-json.lock")
+    try:
+        with ExportLock(lock_path):
+            exporter.open()
+            count = exporter.export()
+        print(f"JSON export complete: {count} interface(s) -> {output}")
+        return 0
+    except ExportBusyError:
+        print(f"JSON export already running; skipped ({lock_path})", file=sys.stderr)
+        return 0
+    except (OSError, sqlite3.Error, RuntimeError, ValueError) as error:
+        print(f"JSON export failed: {error}", file=sys.stderr)
+        return 1
+    finally:
+        exporter.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
